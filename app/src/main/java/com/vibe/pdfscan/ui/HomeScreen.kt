@@ -1,8 +1,15 @@
 package com.vibe.pdfscan.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,54 +24,53 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.CloudQueue
-import androidx.compose.material.icons.filled.CloudSync
-import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DocumentScanner
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.NoteAdd
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.automirrored.filled.NoteAdd
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SuggestionChip
-import androidx.compose.material3.SuggestionChipDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -79,14 +85,26 @@ import com.vibe.pdfscan.ui.components.DeleteDialog
 import com.vibe.pdfscan.ui.components.PdfCard
 import com.vibe.pdfscan.ui.components.RenameDialog
 import com.vibe.pdfscan.ui.components.SyncSettingsDialog
-import com.vibe.pdfscan.ui.theme.BluePrimary
-import com.vibe.pdfscan.ui.theme.BlueSecondary
+import kotlinx.coroutines.launch
+
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Palette
+import com.vibe.pdfscan.data.ThemeManager
+import com.vibe.pdfscan.ui.components.SettingsDialog
+import com.vibe.pdfscan.ui.theme.LocalAppGradient
+
+// Caching static shapes and values to avoid runtime allocations during scrolling
+private val ScanBtnShape = RoundedCornerShape(16.dp)
+private val CategoryBtnShape = RoundedCornerShape(12.dp)
+private val EmptyCardShape = RoundedCornerShape(16.dp)
+private val CloudActiveDotColor = Color(0xFF10B981)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     pdfList: List<ScannedPdf>,
     accountManager: CloudAccountManager,
+    themeManager: ThemeManager,
     onStartScan: () -> Unit,
     onOpenPdf: (ScannedPdf) -> Unit,
     onSharePdf: (ScannedPdf) -> Unit,
@@ -95,33 +113,75 @@ fun HomeScreen(
     onDeletePdf: (ScannedPdf) -> Unit,
     onDeleteMultiplePdfs: (List<ScannedPdf>) -> Unit,
     onSyncPdfToCloud: (ScannedPdf) -> Unit,
-    onSelectCloudFolder: () -> Unit,
-    onGoogleSignInClick: () -> Unit,
-    onGoogleSignOutClick: () -> Unit,
-    onMicrosoftSignInClick: () -> Unit,
-    onMicrosoftSignOutClick: () -> Unit,
-    onAutoSyncToggled: (Boolean) -> Unit
+    onConnectGoogleDrive: () -> Unit,
+    onDisconnectGoogleDrive: () -> Unit,
+    onPickGoogleAccountFromSystem: () -> Unit = {},
+    onSyncAllPdfsNow: () -> Unit = {},
+    onManualUploadToDrive: () -> Unit = {}
 ) {
     var pdfToRename by remember { mutableStateOf<ScannedPdf?>(null) }
     var pdfToDelete by remember { mutableStateOf<ScannedPdf?>(null) }
     var showBatchDeleteDialog by remember { mutableStateOf(false) }
     var showSyncDialog by remember { mutableStateOf(false) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
+
+    val appGradient = LocalAppGradient.current
 
     // Chế độ chọn nhiều file
     var selectedPdfs by remember { mutableStateOf<Set<ScannedPdf>>(emptySet()) }
     val isSelectionMode = selectedPdfs.isNotEmpty()
 
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+
     // Lọc theo thư mục danh mục (Tất cả, Hóa đơn, Hợp đồng, Biên bản...)
     var selectedCategory by remember { mutableStateOf(DocumentCategory.ALL) }
+    var isCategoryDropdownExpanded by remember { mutableStateOf(false) }
 
-    val displayedList = remember(pdfList, selectedCategory) {
-        if (selectedCategory == DocumentCategory.ALL) {
-            pdfList
-        } else {
-            pdfList.filter {
-                it.category.equals(selectedCategory.displayName, ignoreCase = true) ||
-                it.category.equals(selectedCategory.folderName, ignoreCase = true)
+    // Tìm kiếm file
+    var searchQuery by remember { mutableStateOf("") }
+
+    // Tính toán số lượng theo từng danh mục
+    val categoryCounts by remember(pdfList) {
+        derivedStateOf {
+            DocumentCategory.values().associateWith { cat ->
+                if (cat == DocumentCategory.ALL) {
+                    pdfList.size
+                } else {
+                    pdfList.count {
+                        it.category.equals(cat.displayName, ignoreCase = true) ||
+                        it.category.equals(cat.folderName, ignoreCase = true)
+                    }
+                }
             }
+        }
+    }
+
+    // Danh sách PDF sau khi lọc theo danh mục và từ khóa tìm kiếm
+    val displayedList by remember(pdfList, selectedCategory, searchQuery) {
+        derivedStateOf {
+            val categoryFiltered = if (selectedCategory == DocumentCategory.ALL) {
+                pdfList
+            } else {
+                pdfList.filter {
+                    it.category.equals(selectedCategory.displayName, ignoreCase = true) ||
+                    it.category.equals(selectedCategory.folderName, ignoreCase = true)
+                }
+            }
+            if (searchQuery.isBlank()) {
+                categoryFiltered
+            } else {
+                categoryFiltered.filter {
+                    it.name.contains(searchQuery.trim(), ignoreCase = true)
+                }
+            }
+        }
+    }
+
+    // Nút cuộn lên đầu trang (hiển thị khi vuốt xuống)
+    val showScrollToTop by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0
         }
     }
 
@@ -132,279 +192,522 @@ fun HomeScreen(
 
     Scaffold(
         topBar = {
-            if (isSelectionMode) {
-                // Thanh thao tác khi đang chọn nhiều file (Selection Action Bar)
-                TopAppBar(
-                    navigationIcon = {
-                        IconButton(onClick = { selectedPdfs = emptySet() }) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Bỏ chọn tất cả"
+            CenterAlignedTopAppBar(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.headlineMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer)
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "PDF",
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
                             )
                         }
-                    },
-                    title = {
-                        Text(
-                            text = "Đã chọn: ${selectedPdfs.size}",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    }
+                },
+                actions = {
+                    // Nút Tải lên Google Drive thủ công (nằm bên trái icon Cài đặt)
+                    IconButton(onClick = onManualUploadToDrive) {
+                        Icon(
+                            imageVector = Icons.Default.CloudUpload,
+                            contentDescription = "Tải lên Google Drive thủ công",
+                            tint = MaterialTheme.colorScheme.primary
                         )
-                    },
-                    actions = {
-                        // Nút chọn tất cả / bỏ chọn
-                        TextButton(
+                    }
+
+                    Box {
+                        IconButton(onClick = { showSettingsDialog = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "Cài đặt & Giao diện",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        if (accountManager.isAnyCloudConnected) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = 8.dp, end = 8.dp)
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(CloudActiveDotColor)
+                            )
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background
+                )
+            )
+        },
+        bottomBar = {
+            if (isSelectionMode) {
+                Surface(
+                    shadowElevation = 8.dp,
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = { selectedPdfs = emptySet() },
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Hủy", fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
                             onClick = {
                                 selectedPdfs = if (selectedPdfs.size == displayedList.size) {
                                     emptySet()
                                 } else {
                                     displayedList.toSet()
                                 }
-                            }
+                            },
+                            shape = RoundedCornerShape(10.dp)
                         ) {
+                            Icon(Icons.Default.SelectAll, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = if (selectedPdfs.size == displayedList.size) "Bỏ chọn" else "Tất cả",
+                                text = if (selectedPdfs.size == displayedList.size) "Bỏ chọn" else "Chọn Tất cả",
                                 fontWeight = FontWeight.Bold
                             )
                         }
 
-                        // Nút chia sẻ nhiều file
-                        IconButton(onClick = { onShareMultiplePdfs(selectedPdfs.toList()) }) {
-                            Icon(
-                                imageVector = Icons.Default.Share,
-                                contentDescription = "Chia sẻ các file đã chọn"
-                            )
-                        }
-
-                        // Nút xóa hàng loạt
-                        IconButton(onClick = { showBatchDeleteDialog = true }) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Xóa các file đã chọn",
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                    )
-                )
-            } else {
-                // Thanh tiêu đề chuẩn
-                CenterAlignedTopAppBar(
-                    title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = stringResource(R.string.app_name),
-                                style = MaterialTheme.typography.headlineMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(MaterialTheme.colorScheme.primaryContainer)
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            IconButton(
+                                onClick = { onShareMultiplePdfs(selectedPdfs.toList()) },
+                                enabled = selectedPdfs.isNotEmpty()
                             ) {
-                                Text(
-                                    text = "PDF",
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                                    )
-                                )
+                                Icon(Icons.Default.Share, contentDescription = "Chia sẻ", tint = MaterialTheme.colorScheme.primary)
+                            }
+
+                            IconButton(
+                                onClick = { showBatchDeleteDialog = true },
+                                enabled = selectedPdfs.isNotEmpty()
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "Xóa", tint = MaterialTheme.colorScheme.error)
                             }
                         }
-                    },
-                    actions = {
-                        Box {
-                            IconButton(onClick = { showSyncDialog = true }) {
-                                Icon(
-                                    imageVector = Icons.Default.CloudSync,
-                                    contentDescription = "Cài đặt đồng bộ đám mây",
-                                    tint = if (accountManager.isAnyCloudConnected) Color(0xFF10B981) else MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            if (accountManager.isAnyCloudConnected) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(top = 8.dp, end = 8.dp)
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFF10B981))
-                                )
-                            }
-                        }
-                    },
-                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background
-                    )
-                )
-            }
-        },
-        floatingActionButton = {
-            if (pdfList.isNotEmpty() && !isSelectionMode) {
-                ExtendedFloatingActionButton(
-                    onClick = onStartScan,
-                    icon = { Icon(Icons.Default.DocumentScanner, contentDescription = null) },
-                    text = { Text("Quét mới") },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    shape = RoundedCornerShape(16.dp)
-                )
+                    }
+                }
             }
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { paddingValues ->
-        LazyColumn(
+        val configuration = LocalConfiguration.current
+        val bottomMargin = (configuration.screenHeightDp * 0.05f).dp
+
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .padding(paddingValues)
         ) {
-            // Hero Scan Action Card
-            item {
-                HeroScanCard(onStartScan = onStartScan)
-            }
-
-            // THẺ TRẠNG THÁI ĐỒNG BỘ ĐÁM MÂY (Hiển thị tài khoản Google & Thư mục tự động lưu)
-            item {
-                CloudSyncStatusCard(
-                    accountManager = accountManager,
-                    onSelectCloudFolder = onSelectCloudFolder,
-                    onGoogleSignInClick = onGoogleSignInClick,
-                    onGoogleSignOutClick = onGoogleSignOutClick,
-                    onOpenSyncDialog = { showSyncDialog = true }
-                )
-            }
-
-            // DẢI TAB THƯ MỤC PHÂN LOẠI (Tất cả, Hóa đơn, Hợp đồng, Biên bản...)
-            item {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp, bottom = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+            // 1. CỤM PHẦN TỬ CỐ ĐỊNH PHÍA TRÊN (Nút quét tài liệu, Thanh tìm kiếm, Tên thư mục, Dropdown chọn thư mục)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp)
+                    .padding(top = 8.dp, bottom = 6.dp)
+            ) {
+                // NÚT "QUÉT TÀI LIỆU MỚI" CỐ ĐỊNH
+                if (appGradient.isGradientActive) {
+                    Surface(
+                        onClick = onStartScan,
+                        shape = ScanBtnShape,
+                        shadowElevation = 3.dp,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(
-                            text = "Thư mục tài liệu",
-                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-
-                        Text(
-                            text = if (isSelectionMode) "Đang chọn file" else "Bấm giữ để chọn nhiều",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isSelectionMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    // Thanh cuộn ngang các thư mục
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        DocumentCategory.values().forEach { category ->
-                            val count = if (category == DocumentCategory.ALL) {
-                                pdfList.size
-                            } else {
-                                pdfList.count {
-                                    it.category.equals(category.displayName, ignoreCase = true) ||
-                                    it.category.equals(category.folderName, ignoreCase = true)
-                                }
-                            }
-
-                            // Chỉ hiển thị tab Tất cả hoặc các thư mục đã có file (hoặc nhóm chính)
-                            if (category == DocumentCategory.ALL || count > 0 ||
-                                category == DocumentCategory.INVOICE || category == DocumentCategory.CONTRACT ||
-                                category == DocumentCategory.RECORD || category == DocumentCategory.DOCUMENT) {
-                                FilterChip(
-                                    selected = selectedCategory == category,
-                                    onClick = { selectedCategory = category },
-                                    label = {
-                                        Text("${category.icon} ${category.displayName} ($count)")
-                                    },
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(appGradient.brush)
+                                .padding(horizontal = 24.dp, vertical = 18.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.DocumentScanner,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.width(15.dp))
+                                Text(
+                                    text = stringResource(R.string.scan_button),
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 18.5.sp,
+                                        color = Color.White
                                     )
                                 )
                             }
                         }
                     }
-                }
-            }
-
-            // Danh sách PDF hoặc Trạng thái trống
-            if (displayedList.isEmpty()) {
-                item {
-                    if (pdfList.isEmpty()) {
-                        EmptyScanState(onStartScan = onStartScan)
-                    } else {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 16.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                } else {
+                    Button(
+                        onClick = onStartScan,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = Color.White
+                        ),
+                        shape = ScanBtnShape,
+                        elevation = ButtonDefaults.buttonElevation(
+                            defaultElevation = 2.dp,
+                            pressedElevation = 6.dp
+                        ),
+                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 18.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DocumentScanner,
+                            contentDescription = null,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(15.dp))
+                        Text(
+                            text = stringResource(R.string.scan_button),
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.5.sp
                             )
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(24.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
+                        )
+                    }
+                }
+
+                // Khoảng cách phía TRÊN thanh tìm kiếm
+                Spacer(modifier = Modifier.height(11.dp))
+
+                // THANH TÌM KIẾM FILE (Kích thước nhỏ gọn dưới nút Quét)
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Tìm kiếm",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(19.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Box(modifier = Modifier.weight(1f)) {
+                            if (searchQuery.isEmpty()) {
                                 Text(
-                                    text = "Thư mục ${selectedCategory.displayName} chưa có tài liệu nào.",
+                                    text = "Tìm kiếm tài liệu...",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                                )
+                            }
+                            BasicTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                    color = MaterialTheme.colorScheme.onSurface
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        if (searchQuery.isNotEmpty()) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            IconButton(
+                                onClick = { searchQuery = "" },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Clear,
+                                    contentDescription = "Xóa tìm kiếm",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
                         }
                     }
                 }
-            } else {
-                items(displayedList, key = { it.file.absolutePath }) { pdf ->
-                    PdfCard(
-                        pdf = pdf,
-                        isSelectionMode = isSelectionMode,
-                        isSelected = selectedPdfs.contains(pdf),
-                        onToggleSelect = { toggled ->
-                            selectedPdfs = if (selectedPdfs.contains(toggled)) {
-                                selectedPdfs - toggled
-                            } else {
-                                selectedPdfs + toggled
-                            }
-                        },
-                        onLongPress = { target ->
-                            selectedPdfs = selectedPdfs + target
-                        },
-                        onOpen = onOpenPdf,
-                        onShare = onSharePdf,
-                        onRename = { pdfToRename = it },
-                        onDelete = { pdfToDelete = it },
-                        onSyncToCloud = onSyncPdfToCloud
+
+                // Khoảng cách phía DƯỚI thanh tìm kiếm (bằng chính xác khoảng cách phía trên)
+                Spacer(modifier = Modifier.height(11.dp))
+
+                // TIÊU ĐỀ & MENU DROPDOWN CHỌN THƯ MỤC CỐ ĐỊNH
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Thư mục tài liệu",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onBackground
                     )
+
+                    // Nút Dropdown chọn thư mục
+                    Box {
+                        Surface(
+                            onClick = { isCategoryDropdownExpanded = true },
+                            shape = CategoryBtnShape,
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 15.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${selectedCategory.icon} ${selectedCategory.displayName} (${displayedList.size})",
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = "Chọn thư mục",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
+                        if (isCategoryDropdownExpanded) {
+                            DropdownMenu(
+                                expanded = isCategoryDropdownExpanded,
+                                onDismissRequest = { isCategoryDropdownExpanded = false },
+                                modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                            ) {
+                                DocumentCategory.values().forEach { category ->
+                                    val count = categoryCounts[category] ?: 0
+                                    val isSelected = selectedCategory == category
+
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text(
+                                                    text = "${category.icon}  ${category.displayName}",
+                                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                )
+                                                Spacer(modifier = Modifier.weight(1f))
+                                                Spacer(modifier = Modifier.width(16.dp))
+                                                Text(
+                                                    text = "($count)",
+                                                    style = MaterialTheme.typography.labelMedium.copy(
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            selectedCategory = category
+                                            isCategoryDropdownExpanded = false
+                                        },
+                                        leadingIcon = if (isSelected) {
+                                            {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        } else null
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
-            // Bottom Spacer for FAB
-            item {
-                Spacer(modifier = Modifier.height(72.dp))
+            // 2. Ô HIỂN THỊ CÁC FILE ĐÃ LƯU (Cố định kích thước theo màn hình, cuộn độc lập bên trong ô)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp)
+            ) {
+                if (displayedList.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (pdfList.isEmpty()) {
+                            EmptyScanState(onStartScan = onStartScan)
+                        } else if (searchQuery.isNotBlank()) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = EmptyCardShape,
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(24.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Search,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "Không tìm thấy tài liệu phù hợp với \"$searchQuery\"",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        } else {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = EmptyCardShape,
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(24.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "Thư mục ${selectedCategory.displayName} chưa có tài liệu nào.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(top = 6.dp, bottom = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(13.dp)
+                    ) {
+                        items(
+                            items = displayedList,
+                            key = { it.file.absolutePath },
+                            contentType = { "PDF_CARD" }
+                        ) { pdf ->
+                            PdfCard(
+                                pdf = pdf,
+                                isSelectionMode = isSelectionMode,
+                                isSelected = selectedPdfs.contains(pdf),
+                                onToggleSelect = { toggled ->
+                                    selectedPdfs = if (selectedPdfs.contains(toggled)) {
+                                        selectedPdfs - toggled
+                                    } else {
+                                        selectedPdfs + toggled
+                                    }
+                                },
+                                onLongPress = { target ->
+                                    selectedPdfs = selectedPdfs + target
+                                },
+                                onOpen = onOpenPdf,
+                                onShare = onSharePdf,
+                                onRename = { pdfToRename = it },
+                                onDelete = { pdfToDelete = it },
+                                onSyncToCloud = onSyncPdfToCloud
+                            )
+                        }
+
+                        item(contentType = "SPACER") {
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
+                    }
+                }
+
+                // Nút cuộn lên đầu trang (Scroll to Top FAB)
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showScrollToTop && !isSelectionMode,
+                    enter = fadeIn(tween(180, easing = FastOutSlowInEasing)) + scaleIn(tween(180, easing = FastOutSlowInEasing)),
+                    exit = fadeOut(tween(150, easing = FastOutSlowInEasing)) + scaleOut(tween(150, easing = FastOutSlowInEasing)),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(bottom = 12.dp, end = 12.dp)
+                ) {
+                    FloatingActionButton(
+                        onClick = {
+                            coroutineScope.launch {
+                                listState.animateScrollToItem(0)
+                            }
+                        },
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        shape = CircleShape,
+                        elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp),
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowUp,
+                            contentDescription = "Cuộn lên đầu",
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
             }
+
+            // Khoảng cách tầm 10% chiều cao màn hình so với cạnh dưới của điện thoại
+            Spacer(modifier = Modifier.height(bottomMargin))
         }
     }
 
     // Dialogs
+    if (showSettingsDialog) {
+        SettingsDialog(
+            themeManager = themeManager,
+            cloudAccountManager = accountManager,
+            pdfList = pdfList,
+            onDismiss = { showSettingsDialog = false },
+            onConnectGoogleDrive = onConnectGoogleDrive,
+            onDisconnectGoogleDrive = onDisconnectGoogleDrive,
+            onPickGoogleAccountFromSystem = onPickGoogleAccountFromSystem,
+            onSyncAllPdfsNow = onSyncAllPdfsNow
+        )
+    }
+
     if (showBatchDeleteDialog) {
         BatchDeleteDialog(
             count = selectedPdfs.size,
@@ -420,19 +723,18 @@ fun HomeScreen(
     if (showSyncDialog) {
         SyncSettingsDialog(
             accountManager = accountManager,
+            pdfList = pdfList,
             onDismiss = { showSyncDialog = false },
-            onSelectCloudFolder = onSelectCloudFolder,
-            onGoogleSignInClick = onGoogleSignInClick,
-            onGoogleSignOutClick = onGoogleSignOutClick,
-            onMicrosoftSignInClick = onMicrosoftSignInClick,
-            onMicrosoftSignOutClick = onMicrosoftSignOutClick,
-            onAutoSyncToggled = onAutoSyncToggled
+            onConnectGoogleDrive = onConnectGoogleDrive,
+            onDisconnectGoogleDrive = onDisconnectGoogleDrive,
+            onPickGoogleAccountFromSystem = onPickGoogleAccountFromSystem,
+            onSyncAllPdfsNow = onSyncAllPdfsNow
         )
     }
 
     pdfToRename?.let { pdf ->
         RenameDialog(
-            currentName = pdf.name,
+            pdf = pdf,
             onDismiss = { pdfToRename = null },
             onConfirm = { newName ->
                 onRenamePdf(pdf, newName)
@@ -450,339 +752,6 @@ fun HomeScreen(
                 pdfToDelete = null
             }
         )
-    }
-}
-
-/**
- * Thẻ hiển thị trạng thái đồng bộ đám mây và cho phép chọn thư mục lưu trực tiếp trên màn hình chính
- */
-@Composable
-private fun CloudSyncStatusCard(
-    accountManager: CloudAccountManager,
-    onSelectCloudFolder: () -> Unit,
-    onGoogleSignInClick: () -> Unit,
-    onGoogleSignOutClick: () -> Unit,
-    onOpenSyncDialog: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (accountManager.isAnyCloudConnected) {
-                MaterialTheme.colorScheme.surface
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-            }
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (accountManager.isAnyCloudConnected) 3.dp else 0.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            // Header hàng trên
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (accountManager.isAnyCloudConnected) Color(0xFFDCFCE7) else MaterialTheme.colorScheme.primaryContainer
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (accountManager.isAnyCloudConnected) Icons.Default.CloudDone else Icons.Default.CloudQueue,
-                            contentDescription = null,
-                            tint = if (accountManager.isAnyCloudConnected) Color(0xFF15803D) else MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Text(
-                            text = "Đồng bộ Đám mây",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                        )
-                        Text(
-                            text = if (accountManager.isAnyCloudConnected) "Đang kích hoạt tự động lưu" else "Miễn phí 100% • Tự động lưu",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (accountManager.isAnyCloudConnected) Color(0xFF15803D) else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                IconButton(onClick = onOpenSyncDialog, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Cài đặt",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            }
-
-            // Trạng thái tài khoản và thư mục lưu
-            if (accountManager.isGoogleConnected || accountManager.isMicrosoftConnected) {
-                // Đã đăng nhập tài khoản
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column {
-                        Text(
-                            text = if (accountManager.isGoogleConnected) "🟢 Google Drive:" else "🔵 OneDrive:",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
-                        )
-                        Text(
-                            text = accountManager.googleEmail ?: accountManager.microsoftEmail ?: "",
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        )
-                    }
-
-                    TextButton(
-                        onClick = {
-                            if (accountManager.isGoogleConnected) onGoogleSignOutClick() else onGoogleSignOutClick()
-                        },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                    ) {
-                        Text("Đăng xuất", style = MaterialTheme.typography.labelSmall, color = Color.Red)
-                    }
-                }
-
-                // THƯ MỤC LƯU TRÊN GOOGLE DRIVE / ONEDRIVE
-                if (accountManager.syncFolderName != null) {
-                    // Đã chọn thư mục
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFFF0FDF4))
-                            .padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.FolderOpen,
-                                contentDescription = null,
-                                tint = Color(0xFF16A34A),
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text(
-                                    text = "Thư mục lưu tự động:",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFF15803D)
-                                )
-                                Text(
-                                    text = accountManager.syncFolderName ?: "",
-                                    style = MaterialTheme.typography.titleSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF15803D)
-                                    )
-                                )
-                            }
-                        }
-
-                        OutlinedButton(
-                            onClick = onSelectCloudFolder,
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                        ) {
-                            Text("Đổi", style = MaterialTheme.typography.labelMedium)
-                        }
-                    }
-                } else {
-                    // Chưa chọn thư mục -> Nút bấm to nổi bật nhắc chọn thư mục
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFFFEF3C7))
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.Warning,
-                                contentDescription = null,
-                                tint = Color(0xFFD97706),
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Bạn chưa chọn thư mục tự động lưu!",
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFB45309)
-                                )
-                            )
-                        }
-
-                        Text(
-                            text = "Hãy chọn một thư mục trên Google Drive để tài liệu scan tự động bay vào các thư mục riêng (Hóa đơn, Hợp đồng...) ngay khi bạn bấm Lưu.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF92400E)
-                        )
-
-                        Button(
-                            onClick = onSelectCloudFolder,
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CreateNewFolder,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Chọn thư mục lưu trên Google Drive",
-                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                            )
-                        }
-                    }
-                }
-            } else {
-                // Chưa đăng nhập tài khoản
-                Text(
-                    text = "Kết nối Google Drive hoặc OneDrive để tự động sao lưu tài liệu an toàn và mở xem trên máy tính bất kỳ lúc nào.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = onGoogleSignInClick,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(
-                            text = "Kết nối Google Drive",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
-                        )
-                    }
-
-                    OutlinedButton(
-                        onClick = onSelectCloudFolder,
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.FolderOpen,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Chọn thư mục", style = MaterialTheme.typography.labelMedium)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun HeroScanCard(onStartScan: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    brush = Brush.linearGradient(
-                        colors = listOf(BluePrimary, BlueSecondary)
-                    )
-                )
-                .padding(20.dp)
-        ) {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = null,
-                        tint = Color(0xFFFDE047),
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "GOOGLE AI SCANNER",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.sp
-                        ),
-                        color = Color.White.copy(alpha = 0.9f)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Text(
-                    text = "Quét tài liệu sang PDF",
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                )
-
-                Text(
-                    text = "Tự động phân loại thư mục • Bộ lọc nét chữ • Đồng bộ Google Drive & OneDrive",
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        color = Color.White.copy(alpha = 0.85f)
-                    ),
-                    modifier = Modifier.padding(top = 4.dp, bottom = 18.dp)
-                )
-
-                Button(
-                    onClick = onStartScan,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.White,
-                        contentColor = BluePrimary
-                    ),
-                    shape = RoundedCornerShape(14.dp),
-                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.DocumentScanner,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = stringResource(R.string.scan_button),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                }
-            }
-        }
     }
 }
 
@@ -811,7 +780,7 @@ private fun EmptyScanState(onStartScan: () -> Unit) {
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Default.NoteAdd,
+                    imageVector = Icons.AutoMirrored.Filled.NoteAdd,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(36.dp)
@@ -821,7 +790,7 @@ private fun EmptyScanState(onStartScan: () -> Unit) {
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = stringResource(R.string.no_documents),
+                text = stringResource(R.string.no_documents_title),
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                 textAlign = TextAlign.Center
             )

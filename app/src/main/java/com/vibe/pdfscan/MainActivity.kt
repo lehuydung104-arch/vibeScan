@@ -1,6 +1,8 @@
 package com.vibe.pdfscan
 
+import android.accounts.AccountManager
 import android.app.Activity
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
@@ -16,14 +18,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.documentfile.provider.DocumentFile
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.common.api.ApiException
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
 import com.vibe.pdfscan.cloud.CloudAccountManager
-import com.vibe.pdfscan.cloud.CloudFolderSyncHelper
-import com.vibe.pdfscan.cloud.GoogleDriveHelper
+import com.vibe.pdfscan.cloud.CloudSyncEngine
+import com.vibe.pdfscan.cloud.CloudTarget
 import com.vibe.pdfscan.data.PdfStorageManager
 import com.vibe.pdfscan.data.ScannedPdf
+import com.vibe.pdfscan.data.ThemeManager
 import com.vibe.pdfscan.scanner.DocumentHeaderExtractor
 import com.vibe.pdfscan.scanner.DocumentScannerHelper
 import com.vibe.pdfscan.ui.HomeScreen
@@ -32,6 +33,7 @@ import com.vibe.pdfscan.ui.theme.VibePDFScanTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -47,16 +49,18 @@ class MainActivity : ComponentActivity() {
 
     private val storageManager by lazy { PdfStorageManager(this) }
     private val cloudAccountManager by lazy { CloudAccountManager(this) }
+    private val themeManager by lazy { ThemeManager(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         setContent {
-            VibePDFScanTheme {
+            VibePDFScanTheme(themeManager = themeManager) {
                 MainApp(
                     activity = this,
                     storageManager = storageManager,
-                    cloudAccountManager = cloudAccountManager
+                    cloudAccountManager = cloudAccountManager,
+                    themeManager = themeManager
                 )
             }
         }
@@ -67,15 +71,23 @@ class MainActivity : ComponentActivity() {
 fun MainApp(
     activity: Activity,
     storageManager: PdfStorageManager,
-    cloudAccountManager: CloudAccountManager
+    cloudAccountManager: CloudAccountManager,
+    themeManager: ThemeManager
 ) {
     var pdfList by remember { mutableStateOf<List<ScannedPdf>>(emptyList()) }
     var reviewSession by remember { mutableStateOf<ActiveReviewSession?>(null) }
+    var pendingCloudTarget by remember { mutableStateOf<CloudTarget?>(null) }
     val coroutineScope = rememberCoroutineScope()
 
     fun refreshList() {
-        pdfList = storageManager.getAllPdfs { fileName ->
-            cloudAccountManager.isFileSynced(fileName)
+        coroutineScope.launch {
+            val list = withContext(Dispatchers.IO) {
+                storageManager.getAllPdfs { fileName ->
+                    cloudAccountManager.isFileSynced(fileName) ||
+                    File(CloudSyncEngine.getDefaultGoogleSyncFolder(), fileName).exists()
+                }
+            }
+            pdfList = list
         }
     }
 
@@ -83,76 +95,154 @@ fun MainApp(
         refreshList()
     }
 
-    // Bộ chọn thư mục đám mây (Storage Access Framework)
-    val folderPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) {
-            CloudFolderSyncHelper.takePersistablePermission(activity, uri)
-            val docFile = DocumentFile.fromTreeUri(activity, uri)
-            val folderName = docFile?.name ?: "Thư mục đám mây"
-            cloudAccountManager.syncFolderUri = uri
-            cloudAccountManager.syncFolderName = folderName
-            Toast.makeText(
-                activity,
-                "Đã liên kết thư mục đồng bộ: $folderName",
-                Toast.LENGTH_SHORT
-            ).show()
-            refreshList()
+    // Bộ chọn tài khoản hệ thống Google
+    val accountChooserLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val accountName = result.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)
+            if (!accountName.isNullOrBlank()) {
+                cloudAccountManager.setGoogleAccount(accountName, accountName.substringBefore("@"))
+                Toast.makeText(activity, "Đã chọn tài khoản Google: $accountName", Toast.LENGTH_SHORT).show()
+                refreshList()
+            }
         }
     }
 
-    // Đăng nhập Google
-    val googleSignInLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+    // Bộ chọn thư mục đám mây (Google Drive / Thư mục máy) thông qua Storage Access Framework
+    val cloudFolderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri ->
+        if (treeUri != null) {
             try {
-                val account = task.getResult(ApiException::class.java)
-                cloudAccountManager.setGoogleAccount(account?.email, account?.displayName)
-                Toast.makeText(
-                    activity,
-                    "Đã kết nối Google Drive: ${account?.email}\nHãy chọn thư mục trên Drive để tự động lưu!",
-                    Toast.LENGTH_LONG
-                ).show()
+                // Xin quyền đọc/ghi vĩnh viễn (Persistable Permission)
+                val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                activity.contentResolver.takePersistableUriPermission(treeUri, takeFlags)
+
+                val folderDoc = DocumentFile.fromTreeUri(activity, treeUri)
+                val folderName = folderDoc?.name ?: "Thư mục đám mây"
+
+                val authority = treeUri.authority ?: ""
+                val isDriveAuthority = authority.contains("docs.storage") || authority.contains("google")
+
+                when (pendingCloudTarget) {
+                    CloudTarget.GOOGLE_DRIVE -> {
+                        cloudAccountManager.setGoogleSyncFolder(treeUri, folderName)
+                        if (isDriveAuthority) {
+                            Toast.makeText(
+                                activity,
+                                "☁️ Đã liên kết thư mục Google Drive: $folderName",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        } else {
+                            Toast.makeText(
+                                activity,
+                                "📁 Đã liên kết: $folderName. (Mẹo: Để lưu trực tiếp lên Google Drive, hãy mở menu ☰ góc trái khi chọn thư mục)",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                    CloudTarget.GENERAL, null -> {
+                        cloudAccountManager.setGeneralSyncFolder(treeUri, folderName)
+                        Toast.makeText(
+                            activity,
+                            "☁️ Đã chọn thư mục sao lưu: $folderName",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
                 refreshList()
             } catch (e: Exception) {
+                e.printStackTrace()
                 Toast.makeText(
                     activity,
-                    "Lỗi đăng nhập Google: ${e.localizedMessage}",
+                    "Không thể lưu quyền thư mục: ${e.localizedMessage}",
                     Toast.LENGTH_LONG
                 ).show()
             }
         }
     }
 
-    fun syncPdf(pdf: ScannedPdf, showSuccessToast: Boolean = true) {
-        val folderUri = cloudAccountManager.syncFolderUri
-        if (folderUri != null) {
-            val success = CloudFolderSyncHelper.syncPdfToFolder(activity, folderUri, pdf.file, pdf.category)
-            if (success) {
-                cloudAccountManager.markFileAsSynced(pdf.name)
+    // Đồng bộ 1 file PDF thực tế lên Google Drive
+    fun syncPdf(
+        pdf: ScannedPdf,
+        showSuccessToast: Boolean = true,
+        openInteractiveChooser: Boolean = true
+    ) {
+        if (!cloudAccountManager.isGoogleConnected) {
+            if (showSuccessToast) {
+                Toast.makeText(
+                    activity,
+                    "Vui lòng kết nối tài khoản Google Drive trong Cài đặt",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            return
+        }
+
+        coroutineScope.launch {
+            val result = CloudSyncEngine.syncSinglePdf(activity, pdf.file, cloudAccountManager)
+            if (result.success) {
                 refreshList()
                 if (showSuccessToast) {
                     Toast.makeText(
                         activity,
-                        "☁️ Đã đồng bộ \"${pdf.name}\" lên đám mây!",
+                        "☁️ ${result.message}",
                         Toast.LENGTH_SHORT
                     ).show()
                 }
-            } else {
-                Toast.makeText(activity, "Không thể ghi file vào thư mục đám mây", Toast.LENGTH_SHORT).show()
             }
-        } else if (cloudAccountManager.isGoogleConnected || cloudAccountManager.isMicrosoftConnected) {
-            cloudAccountManager.markFileAsSynced(pdf.name)
+
+            if (openInteractiveChooser) {
+                CloudSyncEngine.uploadSinglePdfToGoogleDrive(activity, pdf.file)
+            }
+        }
+    }
+
+    // Tải tất cả PDF lên Google Drive thủ công (Chỉ tải các file chưa từng được tải lên)
+    fun syncAllPdfsNow() {
+        if (!cloudAccountManager.isGoogleConnected) {
+            Toast.makeText(
+                activity,
+                "Vui lòng kết nối Google Drive trong Cài đặt trước khi tải lên",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        if (pdfList.isEmpty()) {
+            Toast.makeText(activity, "Chưa có tài liệu nào để tải lên", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // Lọc hoàn toàn cục bộ trên máy: Chỉ lấy các file chưa được đánh dấu là đã tải lên (isSynced == false)
+        val unsyncedPdfs = pdfList.filter { !it.isSynced }
+        if (unsyncedPdfs.isEmpty()) {
+            Toast.makeText(
+                activity,
+                "Tất cả tài liệu đã được tải lên Google Drive trước đó",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        coroutineScope.launch {
+            val filesToSync = unsyncedPdfs.map { it.file }
+            Toast.makeText(
+                activity,
+                "🚀 Đang tải ${filesToSync.size} tài liệu mới lên Google Drive...",
+                Toast.LENGTH_SHORT
+            ).show()
+            val result = CloudSyncEngine.syncAllPdfs(activity, filesToSync, cloudAccountManager)
             refreshList()
-            if (showSuccessToast) {
-                Toast.makeText(
-                    activity,
-                    "☁️ Đã đưa \"${pdf.name}\" vào hàng đợi đồng bộ mây!",
-                    Toast.LENGTH_SHORT
-                ).show()
+            Toast.makeText(
+                activity,
+                if (result.success) "☁️ ${result.message}" else "⚠️ ${result.message}",
+                Toast.LENGTH_SHORT
+            ).show()
+
+            if (filesToSync.isNotEmpty()) {
+                CloudSyncEngine.uploadMultiplePdfsToGoogleDrive(activity, filesToSync)
             }
         }
     }
@@ -185,8 +275,9 @@ fun MainApp(
                     coroutineScope.launch {
                         val extractedTitle = DocumentHeaderExtractor.extractTitleFromImage(activity, firstPageUri)
                         if (!extractedTitle.isNullOrBlank()) {
+                            val boundedTitle = if (extractedTitle.length > 26) extractedTitle.substring(0, 26).trim() else extractedTitle
                             reviewSession = session.copy(
-                                initialTitle = extractedTitle,
+                                initialTitle = boundedTitle,
                                 isTitleExtractedByAi = true
                             )
                         }
@@ -207,7 +298,6 @@ fun MainApp(
             pageUris = currentSession.pageUris,
             initialTitle = currentSession.initialTitle,
             isTitleExtractedByAi = currentSession.isTitleExtractedByAi,
-            isCloudConnected = cloudAccountManager.isAnyCloudConnected && cloudAccountManager.isAutoSyncEnabled,
             onGetSuggestedName = { baseName -> storageManager.getSuggestedName(baseName) },
             onSave = { customName, filterMode, rotationDegrees ->
                 coroutineScope.launch {
@@ -222,16 +312,14 @@ fun MainApp(
                         )
                     }
 
+                    reviewSession = null
+
                     if (savedPdf != null) {
                         refreshList()
                         Toast.makeText(activity, "Đã lưu: ${savedPdf.name}", Toast.LENGTH_SHORT).show()
-                        if (cloudAccountManager.isAutoSyncEnabled && cloudAccountManager.isAnyCloudConnected) {
-                            syncPdf(savedPdf, showSuccessToast = true)
-                        }
                     } else {
                         Toast.makeText(activity, "Lỗi khi lưu file PDF", Toast.LENGTH_SHORT).show()
                     }
-                    reviewSession = null
                 }
             },
             onSaveAndShare = { customName, filterMode, rotationDegrees ->
@@ -247,16 +335,14 @@ fun MainApp(
                         )
                     }
 
+                    reviewSession = null
+
                     if (savedPdf != null) {
                         refreshList()
-                        if (cloudAccountManager.isAutoSyncEnabled && cloudAccountManager.isAnyCloudConnected) {
-                            syncPdf(savedPdf, showSuccessToast = false)
-                        }
                         storageManager.sharePdf(savedPdf)
                     } else {
                         Toast.makeText(activity, "Lỗi khi lưu file PDF", Toast.LENGTH_SHORT).show()
                     }
-                    reviewSession = null
                 }
             },
             onCancel = {
@@ -267,6 +353,7 @@ fun MainApp(
         HomeScreen(
             pdfList = pdfList,
             accountManager = cloudAccountManager,
+            themeManager = themeManager,
             onStartScan = {
                 DocumentScannerHelper.startScan(
                     activity = activity,
@@ -290,8 +377,10 @@ fun MainApp(
                 storageManager.shareMultiplePdfs(pdfs)
             },
             onRenamePdf = { pdf, newName ->
+                val oldName = pdf.name
                 val success = storageManager.renamePdf(pdf, newName)
                 if (success) {
+                    cloudAccountManager.renameSyncedFile(oldName, newName)
                     refreshList()
                     Toast.makeText(activity, "Đã đổi tên tài liệu", Toast.LENGTH_SHORT).show()
                 } else {
@@ -299,8 +388,10 @@ fun MainApp(
                 }
             },
             onDeletePdf = { pdf ->
+                val name = pdf.name
                 val success = storageManager.deletePdf(pdf)
                 if (success) {
+                    cloudAccountManager.markFileAsUnsynced(name)
                     refreshList()
                     Toast.makeText(activity, "Đã xóa tài liệu", Toast.LENGTH_SHORT).show()
                 } else {
@@ -308,6 +399,7 @@ fun MainApp(
                 }
             },
             onDeleteMultiplePdfs = { pdfs ->
+                pdfs.forEach { cloudAccountManager.markFileAsUnsynced(it.name) }
                 val count = storageManager.deleteMultiplePdfs(pdfs)
                 if (count > 0) {
                     refreshList()
@@ -315,44 +407,43 @@ fun MainApp(
                 }
             },
             onSyncPdfToCloud = { pdf ->
-                syncPdf(pdf, showSuccessToast = true)
+                syncPdf(pdf, showSuccessToast = false, openInteractiveChooser = true)
             },
-            onSelectCloudFolder = {
-                Toast.makeText(
-                    activity,
-                    "👉 Chọn Google Drive hoặc OneDrive ở menu bên trái -> Bấm chọn thư mục muốn lưu!",
-                    Toast.LENGTH_LONG
-                ).show()
-                folderPickerLauncher.launch(null)
+            onConnectGoogleDrive = {
+                pendingCloudTarget = CloudTarget.GOOGLE_DRIVE
+                Toast.makeText(activity, "Hãy chọn hoặc tạo thư mục trong Google Drive của bạn", Toast.LENGTH_LONG).show()
+                cloudFolderPickerLauncher.launch(null)
             },
-            onGoogleSignInClick = {
-                val client = GoogleDriveHelper.getGoogleSignInClient(activity)
-                googleSignInLauncher.launch(client.signInIntent)
+            onDisconnectGoogleDrive = {
+                cloudAccountManager.clearGoogleAccount()
+                Toast.makeText(activity, "Đã ngắt kết nối Google Drive", Toast.LENGTH_SHORT).show()
+                refreshList()
             },
-            onGoogleSignOutClick = {
-                GoogleDriveHelper.signOut(activity) {
-                    cloudAccountManager.clearGoogleAccount()
-                    Toast.makeText(activity, "Đã đăng xuất tài khoản Google", Toast.LENGTH_SHORT).show()
-                    refreshList()
+            onPickGoogleAccountFromSystem = {
+                pendingCloudTarget = CloudTarget.GOOGLE_DRIVE
+                try {
+                    @Suppress("DEPRECATION")
+                    val intent = AccountManager.newChooseAccountIntent(
+                        null,
+                        null,
+                        arrayOf("com.google"),
+                        false,
+                        null,
+                        null,
+                        null,
+                        null
+                    )
+                    accountChooserLauncher.launch(intent)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    Toast.makeText(activity, "Vui lòng nhập email trực tiếp trong hộp thoại", Toast.LENGTH_SHORT).show()
                 }
             },
-            onMicrosoftSignInClick = {
-                cloudAccountManager.setMicrosoftAccount("user.samsung@outlook.com", "Microsoft Account")
-                Toast.makeText(activity, "Đã kết nối tài khoản Microsoft OneDrive", Toast.LENGTH_SHORT).show()
-                refreshList()
+            onSyncAllPdfsNow = {
+                syncAllPdfsNow()
             },
-            onMicrosoftSignOutClick = {
-                cloudAccountManager.clearMicrosoftAccount()
-                Toast.makeText(activity, "Đã ngắt kết nối Microsoft OneDrive", Toast.LENGTH_SHORT).show()
-                refreshList()
-            },
-            onAutoSyncToggled = { enabled ->
-                cloudAccountManager.isAutoSyncEnabled = enabled
-                Toast.makeText(
-                    activity,
-                    if (enabled) "Đã bật tự động đồng bộ lên mây" else "Đã tắt tự động đồng bộ",
-                    Toast.LENGTH_SHORT
-                ).show()
+            onManualUploadToDrive = {
+                syncAllPdfsNow()
             }
         )
     }

@@ -1,9 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
+    <!-- Cho phép chia sẻ file PDF từ bộ nhớ công khai Documents / VibeScan -->
+    <external-path
+        name="external_storage_root"
+        path="." />
+
+    <!-- Cho phép chia sẻ từ thư mục external-files của app -->
     <external-files-path
-        name="external_scanned_docs"
-        path="Documents" />
+        name="external_files_root"
+        path="." />
+
+    <!-- Cho phép chia sẻ từ thư mục internal-files của app -->
     <files-path
-        name="internal_scanned_docs"
-        path="scanned_docs" />
+        name="internal_files_root"
+        path="." />
+
+    <!-- Cho phép chia sẻ từ thư mục cache của app (vd file mẫu test) -->
+    <cache-path
+        name="cache_root"
+        path="." />
+
+    <!-- Cho phép chia sẻ từ external cache -->
+    <external-cache-path
+        name="external_cache_root"
+        path="." />
+
+    <!-- Bao phủ toàn bộ root bộ nhớ cho thiết bị Android -->
+    <root-path
+        name="device_root"
+        path="." />
 </paths>

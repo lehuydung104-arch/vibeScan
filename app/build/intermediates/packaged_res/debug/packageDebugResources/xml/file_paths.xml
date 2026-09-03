@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<paths>
-    <external-files-path
-        name="external_scanned_docs"
-        path="Documents" />
-    <files-path
-        name="internal_scanned_docs"
-        path="scanned_docs" />
-</paths>

@@ -10,7 +10,6 @@ import com.vibe.pdfscan.scanner.ImageFilterHelper
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
-import java.util.ArrayList
 import java.util.Date
 import java.util.Locale
 
@@ -45,19 +44,47 @@ enum class DocumentCategory(val folderName: String, val icon: String, val displa
 
 class PdfStorageManager(private val context: Context) {
 
-    // Thư mục gốc lưu trữ VibeScan trong bộ nhớ tài liệu của ứng dụng
+    /**
+     * Thư mục lưu trữ công khai vĩnh viễn (Public Documents / VibeScan).
+     * Khi người dùng gỡ cài đặt ứng dụng, thư mục này và toàn bộ file PDF KHÔNG BỊ MẤT.
+     * Khi cài lại ứng dụng, hệ thống sẽ tự động quét lại và nạp lại toàn bộ file.
+     */
     val storageDir: File by lazy {
+        val publicDocs = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+        val publicVibeScan = File(publicDocs, "VibeScan")
+        try {
+            if (!publicVibeScan.exists()) {
+                publicVibeScan.mkdirs()
+            }
+            if (publicVibeScan.exists() && publicVibeScan.canWrite()) {
+                publicVibeScan
+            } else {
+                getAppFallbackDir()
+            }
+        } catch (e: Exception) {
+            getAppFallbackDir()
+        }
+    }
+
+    private fun getAppFallbackDir(): File {
         val baseDir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
             ?: context.filesDir
         val scanFolder = File(baseDir, "VibeScan")
         if (!scanFolder.exists()) {
             scanFolder.mkdirs()
         }
-        scanFolder
+        return scanFolder
     }
 
     /**
-     * Lấy hoặc tạo thư mục con riêng biệt theo danh mục (Hóa đơn, Hợp đồng, v.v.)
+     * Lấy đường dẫn hiển thị trực quan cho người dùng
+     */
+    fun getDisplayStorageLocation(): String {
+        return "Bộ nhớ trong > Documents > VibeScan"
+    }
+
+    /**
+     * Lấy hoặc tạo thư mục con riêng biệt theo danh mục (Hóa đơn, Hợp đồng, Giấy tờ, v.v.)
      */
     fun getCategoryDir(category: DocumentCategory): File {
         val folder = if (category == DocumentCategory.ALL) {
@@ -176,33 +203,42 @@ class PdfStorageManager(private val context: Context) {
     }
 
     /**
-     * Lấy danh sách tất cả các file PDF đã quét từ thư mục gốc và mọi thư mục con
+     * Lấy danh sách tất cả các file PDF đã quét từ thư mục công khai vĩnh viễn và mọi thư mục con.
+     * Tự động quét và phục hồi lại toàn bộ danh sách file khi người dùng cài lại app.
      */
     fun getAllPdfs(isSyncedChecker: (String) -> Boolean = { false }): List<ScannedPdf> {
-        val pdfList = mutableListOf<ScannedPdf>()
+        val pdfMap = mutableMapOf<String, ScannedPdf>()
 
-        // Quét đệ quy thư mục gốc và tất cả thư mục con (Hóa đơn, Hợp đồng, Biên bản...)
-        storageDir.walkTopDown().forEach { file ->
-            if (file.isFile && file.extension.equals("pdf", ignoreCase = true) && file.length() > 0) {
-                // Xác định category dựa trên tên thư mục cha hoặc tên file
-                val parentName = file.parentFile?.name
-                val categoryName = if (parentName != null && parentName != "VibeScan") {
-                    parentName
-                } else {
-                    DocumentCategory.fromFileName(file.name).displayName
+        // Danh sách các thư mục cần quét (quét cả thư mục công khai và thư mục app cũ nếu có)
+        val publicDocs = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+        val publicVibeScan = File(publicDocs, "VibeScan")
+        val appSpecificVibeScan = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: context.filesDir, "VibeScan")
+        val internalVibeScan = File(context.filesDir, "VibeScan")
+
+        val directoriesToScan = listOf(publicVibeScan, appSpecificVibeScan, internalVibeScan)
+
+        directoriesToScan.forEach { dir ->
+            if (dir.exists()) {
+                dir.walkTopDown().forEach { file ->
+                    // Bỏ qua thư mục sao lưu Google_Drive, không quét trùng và không hiện nhãn Google_Drive
+                    val isBackupFolder = file.parentFile?.name.equals("Google_Drive", ignoreCase = true)
+                    if (!isBackupFolder && file.isFile && file.extension.equals("pdf", ignoreCase = true) && file.length() > 0) {
+                        // Tránh thêm file trùng tên từ nhiều thư mục
+                        if (!pdfMap.containsKey(file.name)) {
+                            val categoryName = DocumentCategory.fromFileName(file.name).displayName
+
+                            pdfMap[file.name] = ScannedPdf(
+                                file = file,
+                                isSynced = isSyncedChecker(file.name),
+                                category = categoryName
+                            )
+                        }
+                    }
                 }
-
-                pdfList.add(
-                    ScannedPdf(
-                        file = file,
-                        isSynced = isSyncedChecker(file.name),
-                        category = categoryName
-                    )
-                )
             }
         }
 
-        return pdfList.sortedByDescending { it.lastModified }
+        return pdfMap.values.sortedByDescending { it.lastModified }
     }
 
     /**

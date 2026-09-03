@@ -30,6 +30,13 @@ android {
         }
     }
 
+    applicationVariants.all {
+        outputs.all {
+            val output = this as? com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            output?.outputFileName = "huydVibeScan.apk"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
@@ -48,6 +55,9 @@ android {
     }
 
     packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
         resources {
             excludes += listOf(
                 "/META-INF/{AL2.0,LGPL2.1}",
@@ -81,14 +91,11 @@ dependencies {
     // Google Play Services ML Kit Document Scanner API
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1")
 
-    // Google Play Services Auth (Google Sign-In)
-    implementation("com.google.android.gms:play-services-auth:21.0.0")
-
     // Coil Image Loading for Compose (Xem trước ảnh trang vừa scan)
     implementation("io.coil-kt:coil-compose:2.6.0")
 
-    // Google ML Kit Text Recognition (AI nhận diện chữ trích xuất tiêu đề văn bản)
-    implementation("com.google.mlkit:text-recognition:16.0.0")
+    // Google ML Kit Text Recognition (AI nhận diện chữ trích xuất tiêu đề văn bản - hỗ trợ 16 KB alignment cho Android 15+)
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 
     // Debugging UI
     debugImplementation("androidx.compose.ui:ui-tooling")

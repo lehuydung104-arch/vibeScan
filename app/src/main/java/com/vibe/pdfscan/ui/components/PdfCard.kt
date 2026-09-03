@@ -1,8 +1,8 @@
 package com.vibe.pdfscan.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,11 +14,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
@@ -27,8 +26,6 @@ import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -52,6 +49,13 @@ import com.vibe.pdfscan.data.ScannedPdf
 import com.vibe.pdfscan.ui.theme.PdfRed
 import com.vibe.pdfscan.ui.theme.PdfRedLight
 
+// Caching static shapes to avoid object recreation on every frame during fast scrolling
+private val CardShape = RoundedCornerShape(16.dp)
+private val IconBadgeShape = RoundedCornerShape(12.dp)
+private val CategoryBadgeShape = RoundedCornerShape(6.dp)
+private val CloudUploadIconColor = Color(0xFF10B981)
+private val CloudSyncedCheckColor = Color(0xFF10B981)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PdfCard(
@@ -72,7 +76,6 @@ fun PdfCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
             .combinedClickable(
                 onClick = {
                     if (isSelectionMode) {
@@ -88,15 +91,9 @@ fun PdfCard(
                         onToggleSelect(pdf)
                     }
                 }
-            )
-            .then(
-                if (isSelected) {
-                    Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(16.dp))
-                } else {
-                    Modifier
-                }
             ),
-        shape = RoundedCornerShape(16.dp),
+        shape = CardShape,
+        border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
@@ -104,33 +101,32 @@ fun PdfCard(
                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
             }
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 3.dp else 1.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(horizontal = 15.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Checkbox khi ở chế độ chọn nhiều
-            if (isSelectionMode) {
-                Checkbox(
-                    checked = isSelected,
-                    onCheckedChange = { onToggleSelect(pdf) },
-                    colors = CheckboxDefaults.colors(
-                        checkedColor = MaterialTheme.colorScheme.primary
+            // Icon tài liệu / Đổi thành dấu tích khi file được chọn
+            Box(
+                modifier = Modifier
+                    .size(46.dp)
+                    .clip(IconBadgeShape)
+                    .background(
+                        if (isSelected) MaterialTheme.colorScheme.primary else PdfRedLight
                     ),
-                    modifier = Modifier.padding(end = 4.dp)
-                )
-            } else {
-                // PDF Badge Icon
-                Box(
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(PdfRedLight),
-                    contentAlignment = Alignment.Center
-                ) {
+                contentAlignment = Alignment.Center
+            ) {
+                if (isSelected) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Đã chọn",
+                        tint = Color.White,
+                        modifier = Modifier.size(26.dp)
+                    )
+                } else {
                     Icon(
                         imageVector = Icons.Default.PictureAsPdf,
                         contentDescription = "PDF File",
@@ -138,28 +134,45 @@ fun PdfCard(
                         modifier = Modifier.size(26.dp)
                     )
                 }
-                Spacer(modifier = Modifier.width(12.dp))
             }
+            Spacer(modifier = Modifier.width(15.dp))
 
-            // File Info (Title + Metadata + Category Badge + Cloud Badge)
+            // File Info (Title + Dấu tích xanh đồng bộ + Metadata + Category Badge)
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = pdf.name,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = pdf.name,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
 
-                Spacer(modifier = Modifier.height(3.dp))
+                    // Dấu tích xanh nhỏ gọn gàng đặt sau tên file khi đã đồng bộ
+                    if (pdf.isSynced) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Đã đồng bộ lên đám mây",
+                            tint = CloudSyncedCheckColor,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     // Category Badge (Ví dụ: Hóa đơn, Hợp đồng, Biên bản...)
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(CategoryBadgeShape)
                             .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f))
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
@@ -184,34 +197,6 @@ fun PdfCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-
-                    // Cloud Sync Badge
-                    if (pdf.isSynced) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(Color(0xFFDCFCE7))
-                                .padding(horizontal = 4.dp, vertical = 1.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.CloudDone,
-                                    contentDescription = null,
-                                    tint = Color(0xFF15803D),
-                                    modifier = Modifier.size(11.dp)
-                                )
-                                Spacer(modifier = Modifier.width(2.dp))
-                                Text(
-                                    text = "Đã lên mây",
-                                    color = Color(0xFF15803D),
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                )
-                            }
-                        }
-                    }
                 }
             }
 
@@ -229,57 +214,59 @@ fun PdfCard(
                         )
                     }
 
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Đồng bộ lên mây") },
-                            leadingIcon = {
-                                Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color(0xFF10B981))
-                            },
-                            onClick = {
-                                showMenu = false
-                                onSyncToCloud(pdf)
-                            }
-                        )
+                    if (showMenu) {
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Đồng bộ lên mây") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.CloudUpload, contentDescription = null, tint = CloudUploadIconColor)
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onSyncToCloud(pdf)
+                                }
+                            )
 
-                        DropdownMenuItem(
-                            text = { Text("Chia sẻ") },
-                            leadingIcon = {
-                                Icon(Icons.Default.Share, contentDescription = null)
-                            },
-                            onClick = {
-                                showMenu = false
-                                onShare(pdf)
-                            }
-                        )
+                            DropdownMenuItem(
+                                text = { Text("Chia sẻ") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Share, contentDescription = null)
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onShare(pdf)
+                                }
+                            )
 
-                        DropdownMenuItem(
-                            text = { Text("Đổi tên") },
-                            leadingIcon = {
-                                Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null)
-                            },
-                            onClick = {
-                                showMenu = false
-                                onRename(pdf)
-                            }
-                        )
+                            DropdownMenuItem(
+                                text = { Text("Đổi tên") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null)
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onRename(pdf)
+                                }
+                            )
 
-                        DropdownMenuItem(
-                            text = { Text("Xóa", color = MaterialTheme.colorScheme.error) },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            },
-                            onClick = {
-                                showMenu = false
-                                onDelete(pdf)
-                            }
-                        )
+                            DropdownMenuItem(
+                                text = { Text("Xóa", color = MaterialTheme.colorScheme.error) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onDelete(pdf)
+                                }
+                            )
+                        }
                     }
                 }
             }

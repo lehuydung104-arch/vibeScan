@@ -53,7 +53,7 @@ import java.util.Locale
 @Composable
 fun SaveScanDialog(
     defaultName: String,
-    isCloudConnected: Boolean,
+    isCloudConnected: Boolean = false,
     onSave: (String) -> Unit,
     onSaveAndShare: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -64,10 +64,11 @@ fun SaveScanDialog(
     }
 
     val categoryTags = listOf(
+        "📄 Tài liệu" to "TaiLieu",
+        "📁 Hồ sơ" to "HoSo",
+        "🪪 Giấy tờ" to "GiayTo",
         "🧾 Hóa đơn" to "HoaDon",
         "📑 Hợp đồng" to "HopDong",
-        "🪪 Giấy tờ" to "GiayTo",
-        "📄 Tài liệu" to "TaiLieu",
         "📚 Sách vở" to "Sach",
         "🏷️ Ghi chú" to "GhiChu",
     )
@@ -203,7 +204,7 @@ fun SaveScanDialog(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Tự động đồng bộ lên Drive/OneDrive",
+                            text = "Tự động đồng bộ lên Google Drive",
                             style = MaterialTheme.typography.labelMedium.copy(
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color(0xFF15803D),

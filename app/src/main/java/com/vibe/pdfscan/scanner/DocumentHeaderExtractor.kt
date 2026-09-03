@@ -115,8 +115,9 @@ object DocumentHeaderExtractor {
             .replace(Regex("\\s+"), " ")
             .trim()
 
-        if (clean.length > 50) {
-            clean = clean.substring(0, 50).trim()
+        // Giới hạn độ dài tối đa 26 ký tự đối với text sinh tự động theo nội dung
+        if (clean.length > 26) {
+            clean = clean.substring(0, 26).trim()
         }
 
         return clean

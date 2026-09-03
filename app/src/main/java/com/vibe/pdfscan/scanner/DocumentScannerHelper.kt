@@ -10,15 +10,16 @@ import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 object DocumentScannerHelper {
 
     /**
-     * Khởi tạo Scanner Client với đầy đủ tính năng:
-     * - SCANNER_MODE_FULL: Cắt góc, xoay, bộ lọc màu/trắng đen
-     * - Hỗ trợ nhập ảnh tài liệu từ Thư viện Samsung Gallery
+     * Khởi tạo Scanner Client:
+     * - SCANNER_MODE_BASE: Tắt tính năng tự động nâng cao/lọc màu sau khi chụp,
+     *   giữ nguyên ảnh gốc tự nhiên, vẫn hỗ trợ cắt góc tự động/thủ công, xoay và sắp xếp trang.
+     * - Hỗ trợ nhập ảnh tài liệu từ Thư viện Gallery
      * - Xuất trực tiếp định dạng PDF và JPEG
      * - Tối đa 100 trang trong 1 lần quét
      */
     fun createScannerClient(): GmsDocumentScanner {
         val options = GmsDocumentScannerOptions.Builder()
-            .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
+            .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_BASE)
             .setResultFormats(
                 GmsDocumentScannerOptions.RESULT_FORMAT_PDF,
                 GmsDocumentScannerOptions.RESULT_FORMAT_JPEG

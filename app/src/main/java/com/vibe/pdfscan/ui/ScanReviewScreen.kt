@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,7 +27,6 @@ import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Share
@@ -43,6 +43,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBarDefaults
@@ -66,6 +67,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.vibe.pdfscan.scanner.DocFilterMode
 import com.vibe.pdfscan.scanner.ImageFilterHelper
+import com.vibe.pdfscan.ui.theme.LocalAppGradient
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -76,42 +78,70 @@ fun ScanReviewScreen(
     pageUris: List<Uri>,
     initialTitle: String,
     isTitleExtractedByAi: Boolean,
-    isCloudConnected: Boolean,
     onGetSuggestedName: (String) -> String,
     onSave: (String, DocFilterMode, Float) -> Unit,
     onSaveAndShare: (String, DocFilterMode, Float) -> Unit,
     onCancel: () -> Unit,
 ) {
-    // Định dạng ngày_tháng_năm lấy từ đồng hồ trên máy (ví dụ: Scan_03_09_2026)
+    val appGradient = LocalAppGradient.current
+
+    // Định dạng ngày_tháng_năm lấy từ đồng hồ trên máy (ví dụ: 03_09_2026)
     val systemClockDate = remember {
         SimpleDateFormat("dd_MM_yyyy", Locale.getDefault()).format(Date())
     }
-    val defaultFormattedName = remember(systemClockDate) {
-        onGetSuggestedName("Scan_$systemClockDate")
+
+    val categoryTags = remember {
+        listOf(
+            "📄 Tài liệu" to "TaiLieu_",
+            "📁 Hồ sơ" to "HoSo_",
+            "🪪 Giấy tờ" to "GiayTo_",
+            "🧾 Hóa đơn" to "HoaDon_",
+            "📑 Hợp đồng" to "HopDong_",
+            "📨 Công văn" to "CongVan_",
+            "📋 Biên bản" to "BienBan_",
+            "📚 Sách vở" to "Sach_",
+            "📁 Bản scan" to "Scan_",
+        )
     }
 
-    var documentName by remember {
-        mutableStateOf(if (isTitleExtractedByAi && initialTitle.isNotBlank()) onGetSuggestedName(initialTitle) else defaultFormattedName)
+    // Tách tiền tố danh mục bị khóa (Prefix) và đoạn văn bản tự do phía sau (Editable Suffix)
+    var selectedPrefix by remember {
+        val matchedTag = categoryTags.find { (_, prefix) ->
+            initialTitle.isNotBlank() && initialTitle.startsWith(prefix, ignoreCase = true)
+        }
+        mutableStateOf(matchedTag?.second ?: "TaiLieu_")
     }
+
+    var editableSuffix by remember {
+        val matchedTag = categoryTags.find { (_, prefix) ->
+            initialTitle.isNotBlank() && initialTitle.startsWith(prefix, ignoreCase = true)
+        }
+        val text = if (matchedTag != null) {
+            initialTitle.removePrefix(matchedTag.second).removePrefix("_")
+        } else if (isTitleExtractedByAi && initialTitle.isNotBlank()) {
+            initialTitle.removePrefix("Scan_").removePrefix("TaiLieu_").removePrefix("_")
+        } else {
+            systemClockDate
+        }
+        mutableStateOf(text)
+    }
+
     var selectedFilter by remember { mutableStateOf(DocFilterMode.ORIGINAL) }
     var rotationDegrees by remember { mutableFloatStateOf(0f) }
 
     LaunchedEffect(initialTitle) {
         if (isTitleExtractedByAi && initialTitle.isNotBlank()) {
-            documentName = onGetSuggestedName(initialTitle)
+            val matchedTag = categoryTags.find { (_, prefix) ->
+                initialTitle.startsWith(prefix, ignoreCase = true)
+            }
+            if (matchedTag != null) {
+                selectedPrefix = matchedTag.second
+                editableSuffix = initialTitle.removePrefix(matchedTag.second).removePrefix("_")
+            } else {
+                editableSuffix = initialTitle.removePrefix("Scan_").removePrefix("TaiLieu_").removePrefix("_")
+            }
         }
     }
-
-    val categoryTags = listOf(
-        "🧾 Hóa đơn" to "HoaDon",
-        "📑 Hợp đồng" to "HopDong",
-        "🪪 Giấy tờ" to "GiayTo",
-        "📄 Tài liệu" to "TaiLieu",
-        "📋 Biên bản" to "BienBan",
-        "📨 Công văn" to "CongVan",
-        "📚 Sách vở" to "Sach",
-        "🏷️ Ghi chú" to "GhiChu",
-    )
 
     // Tạo ColorFilter thời gian thực cho bản xem trước
     val composeColorFilter = remember(selectedFilter) {
@@ -161,11 +191,12 @@ fun ScanReviewScreen(
             )
         },
         bottomBar = {
-            // PHẦN NHẬP TÊN Ở DƯỚI (theo đúng yêu cầu đặt xuống dưới thay vì trên cùng)
+            // KHUNG ĐIỀU KHIỂN Ở DƯỚI (hỗ trợ imePadding để nổi lên trên khi mở bàn phím)
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .imePadding(),
                 shape = RoundedCornerShape(22.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -178,7 +209,102 @@ fun ScanReviewScreen(
                         .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    // 1. Thanh công cụ bộ lọc (Gốc, Nâng cao, Trắng đen...) & Xoay
+                    // 1. Ô NHẬP TÊN BẢN SCAN (KHÓA TIỀN TỐ, CHỈ CHO PHÉP SỬA/XÓA ĐOẠN PHÍA SAU)
+                    OutlinedTextField(
+                        value = editableSuffix,
+                        onValueChange = { editableSuffix = it },
+                        prefix = {
+                            Text(
+                                text = selectedPrefix,
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            )
+                        },
+                        label = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Tên bản scan")
+                                if (isTitleExtractedByAi) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        "• AI nhận diện",
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                            }
+                        },
+                        placeholder = { Text(systemClockDate) },
+                        singleLine = true,
+                        suffix = {
+                            Text(
+                                text = ".pdf",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = if (isTitleExtractedByAi) Icons.Default.AutoAwesome else Icons.Default.Edit,
+                                contentDescription = null,
+                                tint = if (isTitleExtractedByAi) Color(0xFFEAB308) else MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                        trailingIcon = {
+                            if (editableSuffix.isNotEmpty()) {
+                                IconButton(onClick = { editableSuffix = "" }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Clear,
+                                        contentDescription = "Xóa nội dung sau",
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f),
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+
+                    // 2. DẢI NHÃN TÙY CHỌN DANH MỤC ("Tài liệu", "Hồ sơ", "Giấy tờ"...)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        categoryTags.forEach { (label, prefix) ->
+                            val isSelected = selectedPrefix == prefix
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = {
+                                    selectedPrefix = prefix
+                                },
+                                label = {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    )
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                ),
+                            )
+                        }
+                    }
+
+                    // 3. THANH CÔNG CỤ BỘ LỌC ("Nâng cao", "Gốc", "Trắng đen"...) & XOAY
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -215,148 +341,84 @@ fun ScanReviewScreen(
                         }
                     }
 
-                    // 2. Ô nhập tên bản scan (Đặt ở dưới, chỉ hiện bàn phím khi bấm vào)
-                    OutlinedTextField(
-                        value = documentName,
-                        onValueChange = { documentName = it },
-                        label = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Tên bản scan")
-                                if (isTitleExtractedByAi) {
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        "• AI nhận diện",
-                                        color = MaterialTheme.colorScheme.primary,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                    )
-                                }
-                            }
-                        },
-                        placeholder = { Text(defaultFormattedName) },
-                        singleLine = true,
-                        suffix = {
-                            Text(
-                                text = ".pdf",
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = if (isTitleExtractedByAi) Icons.Default.AutoAwesome else Icons.Default.Edit,
-                                contentDescription = null,
-                                tint = if (isTitleExtractedByAi) Color(0xFFEAB308) else MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        },
-                        trailingIcon = {
-                            if (documentName.isNotEmpty()) {
-                                IconButton(onClick = { documentName = "" }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Clear,
-                                        contentDescription = "Xóa chữ",
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
-                            }
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f),
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-
-                    // 3. Dải nhãn tùy chọn nhanh 1 chạm
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        categoryTags.forEach { (label, prefix) ->
-                            FilterChip(
-                                selected = documentName.startsWith(prefix, ignoreCase = true) || documentName.contains(label.substring(2).trim(), ignoreCase = true),
-                                onClick = {
-                                    documentName = onGetSuggestedName("${prefix}_$systemClockDate")
-                                },
-                                label = {
-                                    Text(
-                                        text = label,
-                                        style = MaterialTheme.typography.labelSmall,
-                                    )
-                                },
-                                shape = RoundedCornerShape(8.dp),
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                ),
-                            )
-                        }
-                    }
-
-                    // 4. Thông báo đồng bộ mây nếu có
-                    if (isCloudConnected) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0xFFDCFCE7))
-                                .padding(vertical = 4.dp, horizontal = 8.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CloudDone,
-                                contentDescription = null,
-                                tint = Color(0xFF15803D),
-                                modifier = Modifier.size(14.dp),
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Tự động đồng bộ lên Google Drive / OneDrive khi Lưu",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = Color(0xFF15803D),
-                                ),
-                            )
-                        }
-                    }
-
-                    // 5. Cụm nút Lưu tài liệu
+                    // 4. Cụm nút Lưu & Chia sẻ
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Button(
-                            onClick = {
-                                val finalName = documentName.ifBlank { defaultFormattedName }
-                                onSave(finalName, selectedFilter, rotationDegrees)
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Check,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "LƯU",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.sp,
-                                ),
-                            )
+                        if (appGradient.isGradientActive) {
+                            Surface(
+                                onClick = {
+                                    val finalSuffix = editableSuffix.trim().ifBlank { systemClockDate }
+                                    val rawName = "$selectedPrefix$finalSuffix"
+                                    val finalName = onGetSuggestedName(rawName)
+                                    onSave(finalName, selectedFilter, rotationDegrees)
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                shadowElevation = 2.dp,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(appGradient.brush),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "LƯU",
+                                            style = MaterialTheme.typography.titleMedium.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                letterSpacing = 1.sp,
+                                                color = Color.White
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            Button(
+                                onClick = {
+                                    val finalSuffix = editableSuffix.trim().ifBlank { systemClockDate }
+                                    val rawName = "$selectedPrefix$finalSuffix"
+                                    val finalName = onGetSuggestedName(rawName)
+                                    onSave(finalName, selectedFilter, rotationDegrees)
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "LƯU",
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 1.sp,
+                                    ),
+                                )
+                            }
                         }
 
                         OutlinedButton(
                             onClick = {
-                                val finalName = documentName.ifBlank { defaultFormattedName }
+                                val finalSuffix = editableSuffix.trim().ifBlank { systemClockDate }
+                                val rawName = "$selectedPrefix$finalSuffix"
+                                val finalName = onGetSuggestedName(rawName)
                                 onSaveAndShare(finalName, selectedFilter, rotationDegrees)
                             },
                             shape = RoundedCornerShape(12.dp),
